@@ -1,1 +1,954 @@
-<!DOCTYPE html> <html lang="ru"> <head> <meta charset="UTF-8"> <meta name="viewport" content="width=device-width, initial-scale=1.0"> <title>База поставщиков кабельной продукции</title> <style> * { box-sizing: border-box; } body { margin: 0; font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif; background: #f4f6f8; color: #17202a; } .container { width: min(1600px, calc(100% - 32px)); margin: 32px auto; } h1 { margin: 0 0 8px; font-size: 30px; } .subtitle { margin: 0 0 24px; color: #68737d; } /* ========================= Статус загрузки ========================= */ .loading { background: white; border-radius: 12px; padding: 18px 20px; margin-bottom: 20px; color: #4b5563; box-shadow: 0 2px 8px rgba(0, 0, 0, 0.05); } .loading.success { color: #166534; background: #f0fdf4; } .loading.error { color: #991b1b; background: #fef2f2; } /* ========================= Controls ========================= */ .controls { display: none; margin-top: 20px; background: white; border-radius: 12px; padding: 16px; box-shadow: 0 2px 8px rgba(0, 0, 0, 0.05); } .controls.visible { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; } .search { flex: 1; min-width: 250px; padding: 11px 14px; border: 1px solid #d1d5db; border-radius: 8px; font-size: 14px; outline: none; } .search:focus { border-color: #2563eb; box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.1); } .stats { color: #6b7280; font-size: 14px; white-space: nowrap; } .button { display: inline-flex; align-items: center; justify-content: center; gap: 8px; border: none; border-radius: 8px; padding: 10px 16px; background: #2563eb; color: white; font-size: 14px; font-weight: 600; cursor: pointer; transition: 0.15s; } .button:hover { background: #1d4ed8; } .button.secondary { background: #e8edf3; color: #1f2937; } .button.secondary:hover { background: #dce3eb; } /* ========================= Table ========================= */ .table-wrapper { display: none; margin-top: 20px; background: white; border-radius: 12px; overflow: hidden; box-shadow: 0 2px 10px rgba(0, 0, 0, 0.06); } .table-wrapper.visible { display: block; } .table-scroll { overflow-x: auto; overflow-y: auto; max-height: 70vh; } table { width: 100%; min-width: 1500px; border-collapse: collapse; font-size: 13px; } thead { position: sticky; top: 0; z-index: 5; } th { background: #17202a; color: white; text-align: left; padding: 12px 14px; font-weight: 600; white-space: nowrap; cursor: pointer; user-select: none; } th:hover { background: #253342; } td { padding: 11px 14px; border-bottom: 1px solid #edf0f2; vertical-align: top; line-height: 1.4; } tbody tr:nth-child(even) { background: #fafbfc; } tbody tr:hover { background: #eef5ff; } td:first-child { font-weight: 600; color: #4b5563; } /* ========================= Links ========================= */ a { color: #2563eb; text-decoration: none; } a:hover { text-decoration: underline; } /* ========================= Status ========================= */ .status { display: inline-block; padding: 4px 8px; border-radius: 999px; font-size: 12px; font-weight: 600; white-space: nowrap; } .status-confirmed { background: #dcfce7; color: #166534; } .status-unconfirmed { background: #fef3c7; color: #92400e; } .status-unknown { background: #fee2e2; color: #991b1b; } /* ========================= Empty ========================= */ .empty { display: none; padding: 50px 20px; text-align: center; color: #6b7280; } .empty.visible { display: block; } /* ========================= Mobile ========================= */ @media (max-width: 700px) { .container { width: min( 100% - 20px, 1600px ); margin: 20px auto; } h1 { font-size: 24px; } .controls.visible { flex-direction: column; align-items: stretch; } .search { width: 100%; } .button { width: 100%; } } </style> </head> <body> <div class="container"> <h1> База поставщиков кабельной продукции </h1> <p class="subtitle"> Данные автоматически загружаются из CSV-файла. </p> <!-- ========================= Статус ========================== --> <div class="loading" id="loading" > ⏳ Загрузка базы... </div> <!-- ========================= Controls ========================== --> <div class="controls" id="controls" > <input type="text" id="searchInput" class="search" placeholder="🔎 Поиск по всем колонкам..." > <span class="stats" id="stats" > 0 записей </span>  <button type="button" class="button secondary" id="clearButton" > Очистить поиск </button> </div> <!-- ========================= Table ========================== --> <div class="table-wrapper" id="tableWrapper" > <div class="table-scroll"> <table id="dataTable"> <thead id="tableHead"></thead> <tbody id="tableBody"></tbody> </table> </div> <div class="empty" id="emptyState" > По вашему запросу ничего не найдено. </div> </div> </div> <script> "use strict"; /* * ===================================================== * НАСТРОЙКА * ===================================================== * * CSV должен находиться рядом с index.html. * * Например: * * project/ * ├── index.html * └── suppliers.csv * * Если файл называется по-другому, * поменяйте только эту строку. */ const CSV_FILE = "data.csv"; /* * ===================================================== * Глобальное состояние * ===================================================== */ let headers = []; let rows = []; let filteredRows = []; let sortColumn = -1; let sortDirection = 1; /* * ===================================================== * DOM * ===================================================== */ const loading = document.getElementById("loading"); const controls = document.getElementById("controls"); const searchInput = document.getElementById("searchInput"); const tableWrapper = document.getElementById("tableWrapper"); const tableHead = document.getElementById("tableHead"); const tableBody = document.getElementById("tableBody"); const stats = document.getElementById("stats"); const emptyState = document.getElementById("emptyState"); const exportButton = document.getElementById("exportButton"); const clearButton = document.getElementById("clearButton"); /* * ===================================================== * Загрузка CSV * ===================================================== */ async function loadCSV() { try { setLoading( "⏳ Загрузка файла " + CSV_FILE + "..." ); const response = await fetch(CSV_FILE); if (!response.ok) { throw new Error( "Файл не найден. " + "Проверьте путь: " + CSV_FILE ); } let text = await response.text(); /* * Удаляем BOM */ text = text.replace( /^\uFEFF/, "" ); /* * Разбираем CSV */ const result = parseCSV(text); headers = result.headers; rows = result.rows; filteredRows = [...rows]; /* * Рисуем таблицу */ renderTable(); controls.classList.add( "visible" ); tableWrapper.classList.add( "visible" ); setLoading( "✓ Загружено " + rows.length + " записей", "success" ); } catch (error) { console.error(error); setLoading( "✕ Ошибка загрузки: " + error.message, "error" ); } } /* * ===================================================== * Статус загрузки * ===================================================== */ function setLoading( message, type = "" ) { loading.textContent = message; loading.className = "loading"; if (type) { loading.classList.add( type ); } } /* * ===================================================== * Определение разделителя * ===================================================== */ function detectDelimiter(text) { const firstLine = text .split(/\r?\n/) .find( line => line.trim() !== "" ); if (!firstLine) { return ","; } const candidates = [ ",", ";", "\t" ]; let bestDelimiter = ","; let bestCount = -1; for ( const delimiter of candidates ) { const count = countDelimiter( firstLine, delimiter ); if ( count > bestCount ) { bestCount = count; bestDelimiter = delimiter; } } return bestDelimiter; } /* * ===================================================== * Подсчёт разделителей * ===================================================== */ function countDelimiter( line, delimiter ) { let count = 0; let insideQuotes = false; for ( let i = 0; i < line.length; i++ ) { const char = line[i]; if (char === '"') { if ( insideQuotes && line[i + 1] === '"' ) { i++; } else { insideQuotes = !insideQuotes; } } else if ( char === delimiter && !insideQuotes ) { count++; } } return count; } /* * ===================================================== * CSV Parser * ===================================================== */ function parseCSV(text) { const delimiter = detectDelimiter(text); const data = []; let row = []; let value = ""; let insideQuotes = false; for ( let i = 0; i < text.length; i++ ) { const char = text[i]; /* * Кавычки */ if (char === '"') { if ( insideQuotes && text[i + 1] === '"' ) { value += '"'; i++; } else { insideQuotes = !insideQuotes; } continue; } /* * Разделитель */ if ( char === delimiter && !insideQuotes ) { row.push(value); value = ""; continue; } /* * Конец строки */ if ( ( char === "\n" || char === "\r" ) && !insideQuotes ) { if ( char === "\r" && text[i + 1] === "\n" ) { i++; } row.push(value); value = ""; if ( row.length > 1 || row[0].trim() !== "" ) { data.push(row); } row = []; continue; } value += char; } /* * Последняя строка */ if ( value !== "" || row.length > 0 ) { row.push(value); if ( row.length > 1 || row[0].trim() !== "" ) { data.push(row); } } if ( data.length === 0 ) { throw new Error( "CSV-файл пуст." ); } /* * Заголовки */ const parsedHeaders = data[0].map( function(header) { return header .trim() .replace( /^"|"$/g, "" ); } ); /* * Строки */ const parsedRows = data .slice(1) .map( function(row) { const normalized = []; for ( let i = 0; i < parsedHeaders.length; i++ ) { normalized.push( row[i] !== undefined ? row[i].trim() : "" ); } return normalized; } ); return { headers: parsedHeaders, rows: parsedRows }; } /* * ===================================================== * Отрисовка таблицы * ===================================================== */ function renderTable() { renderHeaders(); renderRows(); } /* * ===================================================== * Заголовки * ===================================================== */ function renderHeaders() { tableHead.innerHTML = ""; const tr = document.createElement( "tr" ); headers.forEach( function( header, index ) { const th = document.createElement( "th" ); th.textContent = header; th.addEventListener( "click", function() { sortTable( index ); } ); tr.appendChild(th); } ); tableHead.appendChild(tr); } /* * ===================================================== * Строки * ===================================================== */ function renderRows() { tableBody.innerHTML = ""; const fragment = document.createDocumentFragment(); filteredRows.forEach( function(row) { const tr = document.createElement( "tr" ); row.forEach( function( value, columnIndex ) { const td = document.createElement( "td" ); renderCell( td, value, headers[ columnIndex ] ); tr.appendChild(td); } ); fragment.appendChild(tr); } ); tableBody.appendChild( fragment ); stats.textContent = filteredRows.length + " из " + rows.length + " записей"; if ( filteredRows.length === 0 ) { emptyState.classList.add( "visible" ); } else { emptyState.classList.remove( "visible" ); } } /* * ===================================================== * Форматирование ячеек * ===================================================== */ function renderCell( td, value, columnName ) { const lowerColumn = String(columnName) .toLowerCase(); const lowerValue = String(value) .toLowerCase(); /* * Статус БИН */ if ( lowerColumn.includes( "статус бин" ) ) { const span = document.createElement( "span" ); span.textContent = value; span.classList.add( "status" ); if ( lowerValue.includes( "подтверждён" ) && !lowerValue.includes( "не подтверждён" ) ) { span.classList.add( "status-confirmed" ); } else if ( lowerValue.includes( "юрлицо" ) ) { span.classList.add( "status-unknown" ); } else { span.classList.add( "status-unconfirmed" ); } td.appendChild(span); return; } /* * Сайт */ if ( lowerColumn === "сайт" && value && value !== "—" ) { const link = document.createElement( "a" ); let url = value; if ( !url.startsWith( "http://" ) && !url.startsWith( "https://" ) ) { url = "https://" + url; } link.href = url; link.target = "_blank"; link.rel = "noopener noreferrer"; link.textContent = value; td.appendChild( link ); return; } /* * Email */ if ( lowerColumn === "email" && value && value !== "—" ) { const link = document.createElement( "a" ); link.href = "mailto:" + value; link.textContent = value; td.appendChild( link ); return; } /* * Телефон */ if ( ( lowerColumn === "телефон" || lowerColumn === "whatsapp" ) && value && value !== "—" ) { const link = document.createElement( "a" ); const phone = value .replace( /[^\d+;]/g, "" ) .split(";")[0]; link.href = "tel:" + phone; link.textContent = value; td.appendChild( link ); return; } /* * Обычный текст */ td.textContent = value; } /* * ===================================================== * Поиск * ===================================================== */ searchInput.addEventListener( "input", function() { const query = searchInput.value .trim() .toLowerCase(); if (!query) { filteredRows = [...rows]; renderRows(); return; } filteredRows = rows.filter( function(row) { return row.some( function(value) { return String( value ) .toLowerCase() .includes( query ); } ); } ); renderRows(); } ); /* * ===================================================== * Сортировка * ===================================================== */ function sortTable( columnIndex ) { if ( sortColumn === columnIndex ) { sortDirection *= -1; } else { sortColumn = columnIndex; sortDirection = 1; } filteredRows.sort( function(a, b) { const valueA = String( a[columnIndex] ?? "" ) .toLowerCase(); const valueB = String( b[columnIndex] ?? "" ) .toLowerCase(); const numberA = parseFloat( valueA.replace( /[^\d.-]/g, "" ) ); const numberB = parseFloat( valueB.replace( /[^\d.-]/g, "" ) ); if ( !Number.isNaN( numberA ) && !Number.isNaN( numberB ) ) { return ( numberA - numberB ) * sortDirection; } return valueA.localeCompare( valueB, "ru" ) * sortDirection; } ); renderRows(); } /* * ===================================================== * Экспорт CSV * ===================================================== */ exportButton.addEventListener( "click", function() { if ( !filteredRows.length ) { alert( "Нет данных для экспорта." ); return; } const csvRows = []; csvRows.push( headers .map(csvEscape) .join(",") ); filteredRows.forEach( function(row) { csvRows.push( row .map(csvEscape) .join(",") ); } ); const csv = "\uFEFF" + csvRows.join( "\r\n" ); const blob = new Blob( [csv], { type: "text/csv;charset=utf-8;" } ); const url = URL.createObjectURL( blob ); const link = document.createElement( "a" ); link.href = url; link.download = "table-export.csv"; document.body.appendChild( link ); link.click(); link.remove(); URL.revokeObjectURL( url ); } ); /* * ===================================================== * Экранирование CSV * ===================================================== */ function csvEscape(value) { const stringValue = String( value ?? "" ); return ( '"' + stringValue.replace( /"/g, '""' ) + '"' ); } /* * ===================================================== * Очистить поиск * ===================================================== */ clearButton.addEventListener( "click", function() { searchInput.value = ""; filteredRows = [...rows]; sortColumn = -1; sortDirection = 1; renderRows(); searchInput.focus(); } ); /* * ===================================================== * Горячая клавиша Ctrl + K * ===================================================== */ document.addEventListener( "keydown", function(event) { if ( ( event.ctrlKey || event.metaKey ) && event.key.toLowerCase() === "k" ) { event.preventDefault(); searchInput.focus(); } } ); /* * ===================================================== * ЗАПУСК * ===================================================== * * Автоматически загружаем CSV * сразу после открытия страницы. */ loadCSV(); </script> </body> </html>
+<!DOCTYPE html> 
+<html lang="ru"> 
+<head> 
+<meta charset="UTF-8"> 
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>База поставщиков кабельной продукции</title>
+<style>
+    /* =========================================================
+       VARIABLES
+    ========================================================= */
+    :root {
+        --primary: #2563eb;
+        --primary-hover: #1d4ed8;
+        --background: #f4f7fb;
+        --surface: #ffffff;
+        --text: #17202a;
+        --text-secondary: #68737d;
+        --text-muted: #9ca3af;
+        --border: #e5e7eb;
+        --border-light: #edf0f2;
+        --success-bg: #ecfdf3;
+        --success-text: #166534;
+        --warning-bg: #fffbeb;
+        --warning-text: #92400e;
+        --error-bg: #fef2f2;
+        --error-text: #991b1b;
+        --row-hover: #eef5ff;
+        --radius: 12px;
+        --shadow: 0 2px 10px rgba(0, 0, 0, 0.06);
+    }
+    /* =========================================================
+       RESET
+    ========================================================= */
+    *,
+    *::before,
+    *::after {
+        box-sizing: border-box;
+    }
+    html {
+        scroll-behavior: smooth;
+    }
+    body {
+        margin: 0;
+        min-height: 100vh;
+        font-family:
+            Inter,
+            -apple-system,
+            BlinkMacSystemFont,
+            "Segoe UI",
+            Roboto,
+            Arial,
+            sans-serif;
+        background: var(--background);
+        color: var(--text);
+    }
+    button,
+    input {
+        font: inherit;
+    }
+    /* =========================================================
+       LAYOUT
+    ========================================================= */
+    .container {
+        width: min(1600px, calc(100% - 32px));
+        margin: 32px auto;
+    }
+    .page-header {
+        margin-bottom: 24px;
+    }
+    .page-title {
+        margin: 0 0 8px;
+        font-size: 30px;
+        line-height: 1.2;
+        font-weight: 700;
+        letter-spacing: -0.02em;
+    }
+    .page-subtitle {
+        margin: 0;
+        color: var(--text-secondary);
+        font-size: 15px;
+        line-height: 1.5;
+    }
+    /* =========================================================
+       LOADING / STATUS
+    ========================================================= */
+    .loading {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        margin-bottom: 20px;
+        padding: 16px 18px;
+        background: var(--surface);
+        border: 1px solid var(--border);
+        border-radius: var(--radius);
+        color: #4b5563;
+        font-size: 14px;
+        box-shadow: var(--shadow);
+    }
+    .loading.success {
+        background: var(--success-bg);
+        border-color: #bbf7d0;
+        color: var(--success-text);
+    }
+    .loading.error {
+        background: var(--error-bg);
+        border-color: #fecaca;
+        color: var(--error-text);
+    }
+    /* =========================================================
+       CONTROLS
+    ========================================================= */
+    .controls {
+        display: none;
+        align-items: center;
+        gap: 10px;
+        flex-wrap: wrap;
+        margin-top: 20px;
+        padding: 14px;
+        background: var(--surface);
+        border: 1px solid var(--border);
+        border-radius: var(--radius);
+        box-shadow: var(--shadow);
+    }
+    .controls.visible {
+        display: flex;
+    }
+    .search-wrapper {
+        position: relative;
+        flex: 1;
+        min-width: 280px;
+    }
+    .search {
+        width: 100%;
+        height: 42px;
+        padding: 0 14px 0 40px;
+        border: 1px solid #d1d5db;
+        border-radius: 8px;
+        outline: none;
+        background: #fff;
+        color: var(--text);
+        font-size: 14px;
+        transition:
+            border-color 0.15s ease,
+            box-shadow 0.15s ease;
+    }
+    .search::placeholder {
+        color: var(--text-muted);
+    }
+    .search:focus {
+        border-color: var(--primary);
+        box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.1);
+    }
+    .search-icon {
+        position: absolute;
+        top: 50%;
+        left: 14px;
+        transform: translateY(-50%);
+        color: var(--text-muted);
+        font-size: 15px;
+        pointer-events: none;
+    }
+    .stats {
+        min-width: 130px;
+        color: var(--text-secondary);
+        font-size: 13px;
+        white-space: nowrap;
+    }
+    /* =========================================================
+       BUTTONS
+    ========================================================= */
+    .button {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        gap: 7px;
+        min-height: 42px;
+        padding: 0 15px;
+        border: 0;
+        border-radius: 8px;
+        background: var(--primary);
+        color: #fff;
+        font-size: 14px;
+        font-weight: 600;
+        cursor: pointer;
+        transition:
+            background 0.15s ease,
+            transform 0.1s ease;
+    }
+    .button:hover {
+        background: var(--primary-hover);
+    }
+    .button:active {
+        transform: translateY(1px);
+    }
+    .button.secondary {
+        background: #eef2f7;
+        color: #1f2937;
+    }
+    .button.secondary:hover {
+        background: #e2e8f0;
+    }
+    /* =========================================================
+       TABLE
+    ========================================================= */
+    .table-wrapper {
+        display: none;
+        position: relative;
+        margin-top: 20px;
+        overflow: hidden;
+        background: var(--surface);
+        border: 1px solid var(--border);
+        border-radius: var(--radius);
+        box-shadow: var(--shadow);
+    }
+    .table-wrapper.visible {
+        display: block;
+    }
+    .table-scroll {
+        max-height: 70vh;
+        overflow-x: auto;
+        overflow-y: auto;
+        scrollbar-width: thin;
+        scrollbar-color: #cbd5e1 transparent;
+    }
+    .table-scroll::-webkit-scrollbar {
+        width: 8px;
+        height: 8px;
+    }
+    .table-scroll::-webkit-scrollbar-track {
+        background: transparent;
+    }
+    .table-scroll::-webkit-scrollbar-thumb {
+        background: #cbd5e1;
+        border-radius: 999px;
+    }
+    table {
+        width: 100%;
+        min-width: 1500px;
+        border-collapse: separate;
+        border-spacing: 0;
+        font-size: 13px;
+    }
+    /* =========================================================
+       TABLE HEADER
+    ========================================================= */
+    thead {
+        position: sticky;
+        top: 0;
+        z-index: 5;
+    }
+    th {
+        padding: 13px 14px;
+        background: #17202a;
+        color: #ffffff;
+        text-align: left;
+        font-weight: 600;
+        line-height: 1.3;
+        white-space: nowrap;
+        cursor: pointer;
+        user-select: none;
+        border-bottom: 1px solid #111827;
+        transition: background 0.15s ease;
+    }
+    th:first-child {
+        border-top-left-radius: 0;
+    }
+    th:hover {
+        background: #253342;
+    }
+    /* =========================================================
+       TABLE BODY
+    ========================================================= */
+    td {
+        padding: 11px 14px;
+        border-bottom: 1px solid var(--border-light);
+        vertical-align: top;
+        line-height: 1.45;
+        color: #374151;
+    }
+    tbody tr {
+        transition: background 0.12s ease;
+    }
+    tbody tr:nth-child(even) {
+        background: #fafbfc;
+    }
+    tbody tr:hover {
+        background: var(--row-hover);
+    }
+    tbody tr:last-child td {
+        border-bottom: none;
+    }
+    td:first-child {
+        color: #4b5563;
+        font-weight: 600;
+    }
+    /* =========================================================
+       LINKS
+    ========================================================= */
+    a {
+        color: var(--primary);
+        text-decoration: none;
+    }
+    a:hover {
+        text-decoration: underline;
+    }
+    /* =========================================================
+       STATUS BADGES
+    ========================================================= */
+    .status {
+        display: inline-flex;
+        align-items: center;
+        padding: 4px 9px;
+        border-radius: 999px;
+        font-size: 12px;
+        font-weight: 600;
+        line-height: 1.2;
+        white-space: nowrap;
+    }
+    .status-confirmed {
+        background: #dcfce7;
+        color: var(--success-text);
+    }
+    .status-unconfirmed {
+        background: #fef3c7;
+        color: var(--warning-text);
+    }
+    .status-unknown {
+        background: #fee2e2;
+        color: var(--error-text);
+    }
+    /* =========================================================
+       EMPTY STATE
+    ========================================================= */
+    .empty {
+        display: none;
+        padding: 50px 20px;
+        text-align: center;
+        color: var(--text-secondary);
+        font-size: 14px;
+    }
+    .empty.visible {
+        display: block;
+    }
+    /* =========================================================
+       RESPONSIVE
+    ========================================================= */
+    @media (max-width: 700px) {
+        .container {
+            width: calc(100% - 20px);
+            margin: 20px auto;
+        }
+        .page-title {
+            font-size: 24px;
+        }
+        .page-subtitle {
+            font-size: 14px;
+        }
+        .controls.visible {
+            flex-direction: column;
+            align-items: stretch;
+        }
+        .search-wrapper {
+            width: 100%;
+            min-width: 0;
+        }
+        .stats {
+            width: 100%;
+            text-align: center;
+        }
+        .button {
+            width: 100%;
+        }
+        .table-scroll {
+            max-height: 65vh;
+        }
+    }
+</style>
+ </head> 
+ <body>
+<main class="container">
+    <!-- =====================================================
+         HEADER
+    ====================================================== -->
+    <header class="page-header">
+        <h1 class="page-title">
+            База поставщиков кабельной продукции
+        </h1>
+        <p class="page-subtitle">
+            Данные автоматически загружаются из CSV-файла.
+        </p>
+    </header>
+    <!-- =====================================================
+         LOADING STATUS
+    ====================================================== -->
+    <div class="loading" id="loading">
+        ⏳ Загрузка базы...
+    </div>
+    <!-- =====================================================
+         CONTROLS
+    ====================================================== -->
+    <section class="controls" id="controls">
+        <div class="search-wrapper">
+            <span class="search-icon">🔎</span>
+            <input
+                type="text"
+                id="searchInput"
+                class="search"
+                placeholder="Поиск по всем колонкам..."
+                autocomplete="off"
+            >
+        </div>
+        <span class="stats" id="stats">
+            0 записей
+        </span>
+        <button
+            type="button"
+            class="button secondary"
+            id="clearButton"
+        >
+            Очистить поиск
+        </button>
+    </section>
+    <!-- =====================================================
+         TABLE
+    ====================================================== -->
+    <section
+        class="table-wrapper"
+        id="tableWrapper"
+    >
+        <div class="table-scroll">
+            <table id="dataTable">
+                <thead id="tableHead"></thead>
+                <tbody id="tableBody"></tbody>
+            </table>
+        </div>
+        <div
+            class="empty"
+            id="emptyState"
+        >
+            По вашему запросу ничего не найдено.
+        </div>
+    </section>
+</main>
+<script>
+    "use strict";
+    /* =========================================================
+       НАСТРОЙКА
+    ========================================================= */
+    /*
+     * CSV должен находиться рядом с index.html.
+     *
+     * Например:
+     *
+     * project/
+     * ├── index.html
+     * └── data.csv
+     */
+    const CSV_FILE = "data.csv";
+    /* =========================================================
+       GLOBAL STATE
+    ========================================================= */
+    let headers = [];
+    let rows = [];
+    let filteredRows = [];
+    let sortColumn = -1;
+    let sortDirection = 1;
+    /* =========================================================
+       DOM
+    ========================================================= */
+    const loading = document.getElementById("loading");
+    const controls = document.getElementById("controls");
+    const searchInput = document.getElementById("searchInput");
+    const tableWrapper = document.getElementById("tableWrapper");
+    const tableHead = document.getElementById("tableHead");
+    const tableBody = document.getElementById("tableBody");
+    const stats = document.getElementById("stats");
+    const emptyState = document.getElementById("emptyState");
+    //const exportButton = document.getElementById("exportButton");
+    const clearButton = document.getElementById("clearButton");
+    /* =========================================================
+       CSV LOADING
+    ========================================================= */
+    async function loadCSV() {
+        try {
+            setLoading(
+                "⏳ Загрузка файла " + CSV_FILE + "..."
+            );
+            const response = await fetch(CSV_FILE);
+            if (!response.ok) {
+                throw new Error(
+                    "Файл не найден. Проверьте путь: " + CSV_FILE
+                );
+            }
+            let text = await response.text();
+            // Удаляем BOM
+            text = text.replace(/^\uFEFF/, "");
+            // Разбираем CSV
+            const result = parseCSV(text);
+            headers = result.headers;
+            rows = result.rows;
+            filteredRows = [...rows];
+            // Отрисовываем таблицу
+            renderTable();
+            controls.classList.add("visible");
+            tableWrapper.classList.add("visible");
+            setLoading(
+                "✓ Загружено " + rows.length + " записей",
+                "success"
+            );
+        } catch (error) {
+            console.error(error);
+            setLoading(
+                "✕ Ошибка загрузки: " + error.message,
+                "error"
+            );
+        }
+    }
+    /* =========================================================
+       LOADING STATUS
+    ========================================================= */
+    function setLoading(message, type = "") {
+        loading.textContent = message;
+        loading.className = "loading";
+        if (type) {
+            loading.classList.add(type);
+        }
+    }
+    /* =========================================================
+       DELIMITER DETECTION
+    ========================================================= */
+    function detectDelimiter(text) {
+        const firstLine = text
+            .split(/\r?\n/)
+            .find(line => line.trim() !== "");
+        if (!firstLine) {
+            return ",";
+        }
+        const candidates = [",", ";", "\t"];
+        let bestDelimiter = ",";
+        let bestCount = -1;
+        for (const delimiter of candidates) {
+            const count = countDelimiter(
+                firstLine,
+                delimiter
+            );
+            if (count > bestCount) {
+                bestCount = count;
+                bestDelimiter = delimiter;
+            }
+        }
+        return bestDelimiter;
+    }
+    /* =========================================================
+       COUNT DELIMITERS
+    ========================================================= */
+    function countDelimiter(line, delimiter) {
+        let count = 0;
+        let insideQuotes = false;
+        for (let i = 0; i < line.length; i++) {
+            const char = line[i];
+            if (char === '"') {
+                if (
+                    insideQuotes &&
+                    line[i + 1] === '"'
+                ) {
+                    i++;
+                } else {
+                    insideQuotes = !insideQuotes;
+                }
+            } else if (
+                char === delimiter &&
+                !insideQuotes
+            ) {
+                count++;
+            }
+        }
+        return count;
+    }
+    /* =========================================================
+       CSV PARSER
+    ========================================================= */
+    function parseCSV(text) {
+        const delimiter = detectDelimiter(text);
+        const data = [];
+        let row = [];
+        let value = "";
+        let insideQuotes = false;
+        for (let i = 0; i < text.length; i++) {
+            const char = text[i];
+            // Кавычки
+            if (char === '"') {
+                if (
+                    insideQuotes &&
+                    text[i + 1] === '"'
+                ) {
+                    value += '"';
+                    i++;
+                } else {
+                    insideQuotes = !insideQuotes;
+                }
+                continue;
+            }
+            // Разделитель
+            if (
+                char === delimiter &&
+                !insideQuotes
+            ) {
+                row.push(value);
+                value = "";
+                continue;
+            }
+            // Конец строки
+            if (
+                (char === "\n" || char === "\r") &&
+                !insideQuotes
+            ) {
+                if (
+                    char === "\r" &&
+                    text[i + 1] === "\n"
+                ) {
+                    i++;
+                }
+                row.push(value);
+                value = "";
+                if (
+                    row.length > 1 ||
+                    row[0].trim() !== ""
+                ) {
+                    data.push(row);
+                }
+                row = [];
+                continue;
+            }
+            value += char;
+        }
+        // Последняя строка
+        if (value !== "" || row.length > 0) {
+            row.push(value);
+            if (
+                row.length > 1 ||
+                row[0].trim() !== ""
+            ) {
+                data.push(row);
+            }
+        }
+        if (data.length === 0) {
+            throw new Error("CSV-файл пуст.");
+        }
+        // Заголовки
+        const parsedHeaders = data[0].map(header =>
+            header
+                .trim()
+                .replace(/^"|"$/g, "")
+        );
+        // Строки
+        const parsedRows = data
+            .slice(1)
+            .map(row => {
+                const normalized = [];
+                for (
+                    let i = 0;
+                    i < parsedHeaders.length;
+                    i++
+                ) {
+                    normalized.push(
+                        row[i] !== undefined
+                            ? row[i].trim()
+                            : ""
+                    );
+                }
+                return normalized;
+            });
+        return {
+            headers: parsedHeaders,
+            rows: parsedRows
+        };
+    }
+    /* =========================================================
+       TABLE RENDERING
+    ========================================================= */
+    function renderTable() {
+        renderHeaders();
+        renderRows();
+    }
+    /* =========================================================
+       TABLE HEADERS
+    ========================================================= */
+    function renderHeaders() {
+        tableHead.innerHTML = "";
+        const tr = document.createElement("tr");
+        headers.forEach((header, index) => {
+            const th = document.createElement("th");
+            th.textContent = header;
+            th.addEventListener("click", () => {
+                sortTable(index);
+            });
+            tr.appendChild(th);
+        });
+        tableHead.appendChild(tr);
+    }
+    /* =========================================================
+       TABLE ROWS
+    ========================================================= */
+    function renderRows() {
+        tableBody.innerHTML = "";
+        const fragment =
+            document.createDocumentFragment();
+        filteredRows.forEach(row => {
+            const tr = document.createElement("tr");
+            row.forEach((value, columnIndex) => {
+                const td = document.createElement("td");
+                renderCell(
+                    td,
+                    value,
+                    headers[columnIndex]
+                );
+                tr.appendChild(td);
+            });
+            fragment.appendChild(tr);
+        });
+        tableBody.appendChild(fragment);
+        stats.textContent =
+            filteredRows.length +
+            " из " +
+            rows.length +
+            " записей";
+        if (filteredRows.length === 0) {
+            emptyState.classList.add("visible");
+        } else {
+            emptyState.classList.remove("visible");
+        }
+    }
+    /* =========================================================
+       CELL FORMATTING
+    ========================================================= */
+    function renderCell(td, value, columnName) {
+        const lowerColumn = String(columnName)
+            .toLowerCase();
+        const lowerValue = String(value)
+            .toLowerCase();
+        /* -----------------------------------------------------
+           STATUS БИН
+        ----------------------------------------------------- */
+        if (lowerColumn.includes("статус бин")) {
+            const span =
+                document.createElement("span");
+            span.textContent = value;
+            span.classList.add("status");
+            if (
+                lowerValue.includes("подтверждён") &&
+                !lowerValue.includes("не подтверждён")
+            ) {
+                span.classList.add(
+                    "status-confirmed"
+                );
+            } else if (
+                lowerValue.includes("юрлицо")
+            ) {
+                span.classList.add(
+                    "status-unknown"
+                );
+            } else {
+                span.classList.add(
+                    "status-unconfirmed"
+                );
+            }
+            td.appendChild(span);
+            return;
+        }
+        /* -----------------------------------------------------
+           WEBSITE
+        ----------------------------------------------------- */
+        if (
+            lowerColumn === "сайт" &&
+            value &&
+            value !== "—"
+        ) {
+            const link =
+                document.createElement("a");
+            let url = value;
+            if (
+                !url.startsWith("http://") &&
+                !url.startsWith("https://")
+            ) {
+                url = "https://" + url;
+            }
+            link.href = url;
+            link.target = "_blank";
+            link.rel =
+                "noopener noreferrer";
+            link.textContent = value;
+            td.appendChild(link);
+            return;
+        }
+        /* -----------------------------------------------------
+           EMAIL
+        ----------------------------------------------------- */
+        if (
+            lowerColumn === "email" &&
+            value &&
+            value !== "—"
+        ) {
+            const link =
+                document.createElement("a");
+            link.href = "mailto:" + value;
+            link.textContent = value;
+            td.appendChild(link);
+            return;
+        }
+        /* -----------------------------------------------------
+           PHONE / WHATSAPP
+        ----------------------------------------------------- */
+        if (
+            (
+                lowerColumn === "телефон" ||
+                lowerColumn === "whatsapp"
+            ) &&
+            value &&
+            value !== "—"
+        ) {
+            const link =
+                document.createElement("a");
+            const phone = value
+                .replace(/[^\d+;]/g, "")
+                .split(";")[0];
+            link.href = "tel:" + phone;
+            link.textContent = value;
+            td.appendChild(link);
+            return;
+        }
+        /* -----------------------------------------------------
+           DEFAULT TEXT
+        ----------------------------------------------------- */
+        td.textContent = value;
+    }
+    /* =========================================================
+       SEARCH
+    ========================================================= */
+    searchInput.addEventListener(
+        "input",
+        function () {
+            const query = searchInput.value
+                .trim()
+                .toLowerCase();
+            if (!query) {
+                filteredRows = [...rows];
+                renderRows();
+                return;
+            }
+            filteredRows = rows.filter(row =>
+                row.some(value =>
+                    String(value)
+                        .toLowerCase()
+                        .includes(query)
+                )
+            );
+            renderRows();
+        }
+    );
+    /* =========================================================
+       SORTING
+    ========================================================= */
+    function sortTable(columnIndex) {
+        if (sortColumn === columnIndex) {
+            sortDirection *= -1;
+        } else {
+            sortColumn = columnIndex;
+            sortDirection = 1;
+        }
+        filteredRows.sort((a, b) => {
+            const valueA = String(
+                a[columnIndex] ?? ""
+            ).toLowerCase();
+            const valueB = String(
+                b[columnIndex] ?? ""
+            ).toLowerCase();
+            const numberA = parseFloat(
+                valueA.replace(/[^\d.-]/g, "")
+            );
+            const numberB = parseFloat(
+                valueB.replace(/[^\d.-]/g, "")
+            );
+            if (
+                !Number.isNaN(numberA) &&
+                !Number.isNaN(numberB)
+            ) {
+                return (
+                    numberA - numberB
+                ) * sortDirection;
+            }
+            return (
+                valueA.localeCompare(
+                    valueB,
+                    "ru"
+                )
+            ) * sortDirection;
+        });
+        renderRows();
+    }
+    /* =========================================================
+       CSV EXPORT
+    ========================================================= */
+
+    /* =========================================================
+       CSV ESCAPE
+    ========================================================= */
+    function csvEscape(value) {
+        const stringValue =
+            String(value ?? "");
+        return (
+            '"' +
+            stringValue.replace(
+                /"/g,
+                '""'
+            ) +
+            '"'
+        );
+    }
+    /* =========================================================
+       CLEAR SEARCH
+    ========================================================= */
+    clearButton.addEventListener(
+        "click",
+        function () {
+            searchInput.value = "";
+            filteredRows = [...rows];
+            sortColumn = -1;
+            sortDirection = 1;
+            renderRows();
+            searchInput.focus();
+        }
+    );
+    /* =========================================================
+       HOTKEY: CTRL + K
+    ========================================================= */
+    document.addEventListener(
+        "keydown",
+        function (event) {
+            if (
+                (event.ctrlKey ||
+                    event.metaKey) &&
+                event.key.toLowerCase() === "k"
+            ) {
+                event.preventDefault();
+                searchInput.focus();
+            }
+        }
+    );
+    /* =========================================================
+       START
+    ========================================================= */
+    loadCSV();
+</script>
+ </body> </html>
