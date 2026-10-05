@@ -687,17 +687,31 @@
     ========================================================= */
     function renderHeaders() {
         tableHead.innerHTML = "";
+    
         const tr = document.createElement("tr");
+    
         headers.forEach((header, index) => {
             const th = document.createElement("th");
+    
             th.textContent = header;
+    
+            // Задаём ширину колонок
+            if (header.toLowerCase() === "телефон") {
+                th.style.width = "140px";
+                th.style.minWidth = "140px";
+                th.style.maxWidth = "140px";
+            }
+    
             th.addEventListener("click", () => {
                 sortTable(index);
             });
+    
             tr.appendChild(th);
         });
+    
         tableHead.appendChild(tr);
     }
+
     /* =========================================================
        TABLE ROWS
     ========================================================= */
